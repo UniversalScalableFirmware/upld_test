@@ -1,0 +1,77 @@
+## @file
+# Azure Pipeline build file for Slim Bootloader
+#
+# Copyright (c) 2020, Intel Corporation. All rights reserved.<BR>
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+schedules:
+- cron: "0 0 * * *"
+  displayName: Daily midnight test
+  branches:
+    include:
+    - master
+  always: true
+
+trigger:
+- master
+
+pr:
+- master
+
+
+jobs:
+- job: Windows
+
+  pool:
+    vmImage: 'windows-2019'
+
+  steps:
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '3.8.x'
+      architecture: 'x64'
+    displayName: Set Python version
+
+  - powershell: |
+      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+      add-type @"
+      using System.Net;
+      using System.Security.Cryptography.X509Certificates;
+      public class TrustAllCertsPolicy : ICertificatePolicy {
+          public bool CheckValidationResult(
+              ServicePoint srvPoint, X509Certificate certificate,
+              WebRequest request, int certificateProblem) {
+              return true;
+          }
+      }
+      "@
+      [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
+      Invoke-WebRequest -Uri https://www.nasm.us/pub/nasm/releasebuilds/2.14.02/win64/nasm-2.14.02-win64.zip -OutFile nasm.zip
+      Expand-Archive .\nasm.zip C:\
+      Invoke-WebRequest -Uri https://acpica.org/sites/acpica/files/iasl-win-20160831_0.zip -OutFile iasl.zip
+      Expand-Archive .\iasl.zip C:\iasl
+      echo "##vso[task.setvariable variable=nasm_prefix;]C:\nasm-2.14.02\"
+      echo "##vso[task.setvariable variable=iasl_prefix;]C:\iasl\"
+      echo "##vso[task.setvariable variable=openssl_path;]C:\Program Files\OpenSSL\bin\"
+    displayName: Windows EDK II Prerequisites
+
+  - script: |
+      git config --global user.email "you@example.com"
+      git config --global user.name  "Your Name"
+    displayName: Environment configuration
+
+  - script: |
+      curl -L -o clang_install.exe https://github.com/llvm/llvm-project/releases/download/llvmorg-12.0.0/LLVM-12.0.0-win64.exe 2>&1
+      clang_install.exe /S
+      "C:\Program Files\LLVM\bin\clang" -v
+    displayName: Install CLANG
+
+  - script: |
+      curl -L -o qemu_install.exe https://qemu.weilnetz.de/w64/2021/qemu-w64-setup-20210203.exe 2>&1
+      7z x qemu_install.exe -o"C:\Program Files\qemu"
+    displayName: Install QEMU
+
+  - script: |
+      python  upld_test.py
+    displayName: Test Universal Payload
