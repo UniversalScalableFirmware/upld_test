@@ -50,7 +50,10 @@ def run_qemu (bios_img, fwu_path, fwu_mode=False, timeout=0):
         extra_args = ['-net', 'none', '-bios', bios_img]
     else:
         extra_args = ["-drive", "file=%s,if=pflash,format=raw" % bios_img]
+    if os.name == 'nt':
+        extra_args.extend(['-L', os.path.dirname(path)])
     cmd_list.extend (extra_args)
+    print (' '.join(cmd_list))
     lines = run_process (cmd_list, timeout)
     return lines
 
