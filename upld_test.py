@@ -105,8 +105,9 @@ def qemu_test (test_pat, dir_dict):
 
     # run test cases
     test_cases = [
-      ('ovmf_upld.py',  [ovmf_img, disk_dir, 'uefi_64'],  'UefiPld_64.bin'),
-      ('sbl_upld.py',   [sbl_img,  disk_dir, 'uefi_64'],  'UefiPld_64.bin'),
+      ('ovmf_upld.py',  [ovmf_img, disk_dir, 'uefi_64'],  'UefiPld_64.elf'),
+      ('sbl_upld.py',   [sbl_img,  disk_dir, 'uefi_64'],  'UefiPld_64.elf'),
+      ('sbl_upld.py',   [sbl_img,  disk_dir, 'linux_64'], 'LinuxPld_64.elf'),
     ]
 
     test_cnt = 0
@@ -155,7 +156,7 @@ def build_uefi_images (dir_dict):
     run_process (cmd.split(' '))
     os.chdir('..')
     entry = '%s\\Build\\UefiPayloadPkgX64\\DEBUG_CLANGDWARF\\X64\\UefiPayloadPkg\\UefiPayloadEntry\\UniversalPayloadEntry\\DEBUG\\UniversalPayloadEntry.elf' % uefi_dir
-    shutil.copyfile(entry, '%s\\UefiPld_64.bin' % out_dir)
+    shutil.copyfile(entry, '%s\\UefiPld_64.elf' % out_dir)
 
     return 0
 
@@ -177,16 +178,47 @@ def build_sbl_images (dir_dict):
 
     return 0
 
+
+def build_linux_images (dir_dict):
+    out_dir = dir_dict['out_dir']
+    sbl_dir = dir_dict['sbl_dir']
+    objcopy = dir_dict['objcopy_path']
+
+    # Build Linux Payload 32
+    cmd = 'python BuildLoader.py build_dsc -p UniversalPayloadPkg/UniversalPayloadPkg.dsc -a x64 -t clangdwarf'
+    ret = subprocess.call(cmd.split(' '), cwd=sbl_dir)
+    if ret:
+        fatal ('Failed to build Linux Payload x64!')
+    shutil.copy ('%s/Build/UniversalPayloadPkg/DEBUG_CLANGDWARF/X64/UniversalPayloadPkg/LinuxLoaderStub/LinuxLoaderStub/DEBUG/LinuxLoaderStub.dll' % sbl_dir, '%s/LinuxPld_64.elf' % out_dir)
+
+    # Inject sections
+    cmd = 'python Script/upld_info.py %s/upld_info.bin Linux64' % out_dir
+    run_process (cmd.split(' '))
+    cmd = objcopy + " -I elf64-x86-64 -O elf64-x86-64 --add-section .upld.initrd=LinuxBins/initrd --add-section .upld.cmdline=LinuxBins/config.cfg --add-section .upld.kernel=LinuxBins/vmlinuz --add-section .upld_info=%s/upld_info.bin %s/LinuxPld_64.elf" % (out_dir, out_dir)
+    run_process (cmd.split(' '))
+    cmd = objcopy + " -I elf64-x86-64 -O elf64-x86-64 --set-section-alignment .upld.kernel=256 --set-section-alignment .upld.initrd=4096 --set-section-alignment .upld.cmdline=16 --set-section-alignment .upld.info=16 %s/LinuxPld_64.elf" % (out_dir)
+    run_process (cmd.split(' '))
+
+    return 0
+
+def get_objcopy():
+    if os.name == 'nt':
+        return "C:\\Program Files\\LLVM\\bin\\llvm-objcopy.exe"
+    else:
+        return "objcopy"
+
 def main ():
     dir_dict = {
                   'out_dir'      : 'Outputs',
                   'sbl_dir'      : 'SlimBoot',
                   'uefi_dir'     : 'UefiPayload',
+                  'objcopy_path' : get_objcopy()
                }
 
     arg_parse  = argparse.ArgumentParser()
-    arg_parse.add_argument('-sb',   dest='skip_build', action='store_true', help='Specify name pattern for payloads to be built')
-    arg_parse.add_argument('-t',   dest='test',  type=str, help='Specify name pattern for payloads to be tested', default = '')
+    arg_parse.add_argument('-sb',  dest='skip_build', action='store_true', help='Specify name pattern for payloads to be built')
+    arg_parse.add_argument('-b',   dest='build',  choices=['all', 'uefi', 'sbl', 'linux'], default='all', help='Build specific target')
+    arg_parse.add_argument('-t',   dest='test',  type=str, default = '', help='Specify name pattern for payloads to be tested')
     args = arg_parse.parse_args()
 
     if os.name != 'nt':
@@ -196,16 +228,21 @@ def main ():
         os.mkdir(dir_dict['out_dir'])
 
     if not args.skip_build:
+        if args.build in ['all', 'uefi']:
+            if build_uefi_images (dir_dict):
+                return -1
 
-        if build_uefi_images (dir_dict):
-            return -1
+        if args.build in ['all', 'sbl']:
+            if build_sbl_images (dir_dict):
+                return -2
 
-        if build_sbl_images (dir_dict):
-            return -2
+        if args.build in ['all', 'linux']:
+            if build_linux_images (dir_dict):
+                return -3
 
-
-    if qemu_test (args.test, dir_dict):
-        return -10
+    if args.test not in ['none']:
+        if qemu_test (args.test, dir_dict):
+            return -10
 
     return 0
 
